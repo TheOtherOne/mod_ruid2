@@ -1,0 +1,5 @@
+mod-ruid2 (0.9.1-1build1) lucid; urgency=low
+
+  * Initial build of mod-ruid2 0.9.1
+
+ -- Wido den Hollander <wido@widodh.nl>  Thu, 18 Nov 2010 15:42:55 +0200

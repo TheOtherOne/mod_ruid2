@@ -1,0 +1,18 @@
+Source: mod-ruid2
+Section: web
+Priority: optional
+Maintainer: Wido den Hollander <wido@widodh.nl>
+Standards-Version: 3.7.2.2
+Build-Depends: debhelper (>> 4), apache2-prefork-dev (>= 2.2.3-3), libcap-dev
+
+Package: libapache2-mod-ruid2
+Architecture: any
+Depends: ${shlibs:Depends}, apache2.2-common
+Description: mod_ruid2 is a suexec module for apache which takes advantage of POSIX.1e capabilities to increase performance
+ mod_ruid2 is a suexec module for apache 2.0, based on mod_ruid and mod_suid2
+ .
+ It runs only on linux because afaik only linux has implemented posix 1003.1e capabilities
+ .
+ It has better performance than mod_suid2 because it doesn`t need to kill httpd children after one request. it makes use of kernel capabilites and after receiving a new request suids again.
+ .
+ There are some security issues, for instance if attacker successfully exploits the httpd process, he can set effective capabilities and setuid to root. i recommend to use some security patch in kernel (grsec) or something..
