@@ -40,7 +40,7 @@ binary-arch: build install
 build: build-stamp
 build-stamp: configure-stamp
 	dh_testdir
-	apxs2 -c mod_ruid2.c
+	apxs2 -l cap -c mod_ruid2.c
 	touch build-stamp-20
 
 clean:
