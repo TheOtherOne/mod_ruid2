@@ -7,7 +7,7 @@ Build-Depends: debhelper (>> 4), apache2-prefork-dev (>= 2.2.3-3), libcap-dev
 
 Package: libapache2-mod-ruid2
 Architecture: any
-Depends: ${shlibs:Depends}, apache2.2-common, libcap2
+Depends: ${shlibs:Depends}
 Description: mod_ruid2 is a suexec module for apache which takes advantage of POSIX.1e capabilities to increase performance
  mod_ruid2 is a suexec module for apache 2.0, based on mod_ruid and mod_suid2
  .
