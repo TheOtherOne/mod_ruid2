@@ -1,6 +1,6 @@
 /*
-   mod_ruid2 0.9.1
-   Copyright (C) 2010 Monshouwer Internet Diensten
+   mod_ruid2 0.9.4
+   Copyright (C) 2011 Monshouwer Internet Diensten
 
    Author: Kees Monshouwer
 
@@ -45,7 +45,7 @@
 #include <sys/capability.h>
 
 #define MODULE_NAME		"mod_ruid2"
-#define MODULE_VERSION		"0.9.1"
+#define MODULE_VERSION		"0.9.4"
 
 #define RUID_DEFAULT_UID	48
 #define RUID_DEFAULT_GID	48
@@ -374,16 +374,76 @@ static void ruid_child_init (apr_pool_t *p, server_rec *s)
 }
 
 
+/* run during request cleanup */
+static apr_status_t ruid_suidback (void *data)
+{
+	request_rec *r = data;
+	
+	ruid_config_t *conf = ap_get_module_config (r->server->module_config, &ruid2_module);
+	core_server_config *core = (core_server_config *) ap_get_module_config(r->server->module_config, &core_module);
+
+	cap_t cap;
+	cap_value_t capval[3];
+	
+	if (cap_mode == RUID_CAP_MODE_KEEP) {
+
+		cap=cap_get_proc();
+		capval[0]=CAP_SETUID;
+		capval[1]=CAP_SETGID;
+		capval[2]=CAP_SYS_CHROOT;
+		cap_set_flag(cap, CAP_EFFECTIVE, (conf->chroot_dir ? 3 : 2), capval, CAP_SET);
+		if (cap_set_proc(cap)!=0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s CRITICAL ERROR %s:cap_set_proc failed before setuid", MODULE_NAME, __func__);
+		}
+		cap_free(cap);
+
+		setgroups(0,NULL);
+		setgid(unixd_config.group_id);
+		setuid(unixd_config.user_id);
+	
+		/* set httpd process dumpable after setuid */
+		if (coredump) {
+			prctl(PR_SET_DUMPABLE,1);
+		}
+		
+		/* jail break */
+		if (conf->chroot_dir) {
+			if (fchdir(chroot_root) < 0) {
+				ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s failed to fchdir to root dir (%d) (%s)", MODULE_NAME, chroot_root, strerror(errno));
+			} else {
+				if (chroot(".") != 0) {
+					ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s jail break failed", MODULE_NAME);
+				}
+			}
+			core->ap_document_root = old_root;
+		}
+
+		cap=cap_get_proc();
+		capval[0]=CAP_SETUID;
+		capval[1]=CAP_SETGID;
+		capval[2]=CAP_SYS_CHROOT;
+		cap_set_flag(cap, CAP_EFFECTIVE, 3, capval, CAP_CLEAR);
+		if (cap_set_proc(cap)!=0) {
+			ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s CRITICAL ERROR %s:cap_set_proc failed after setuid", MODULE_NAME, __func__);
+		}
+		cap_free(cap);
+	}
+
+	return DECLINED;
+}
+
+
 static int ruid_set_perm (request_rec *r, const char *from_func) 
 {
 	ruid_config_t *conf = ap_get_module_config(r->server->module_config, &ruid2_module);
 	ruid_dir_config_t *dconf = ap_get_module_config(r->per_dir_config, &ruid2_module);
 	
-	int retval = DECLINED;
-	int gid, uid, i;
+	int retval = DECLINED, i;
+	gid_t gid;
+	uid_t uid;
 
 	cap_t cap;
-	cap_value_t capval[3];
+	cap_value_t capval[4];
 
 	cap=cap_get_proc();
 	capval[0]=CAP_SETUID;
@@ -404,12 +464,12 @@ static int ruid_set_perm (request_rec *r, const char *from_func)
 		gid=dconf->ruid_gid;
 		uid=dconf->ruid_uid;
 	}
-	
+
 	/* if uid of filename is less than conf->min_uid then set to conf->default_uid */
-	if (uid < conf->min_uid) {
+	if (uid < conf->min_uid || uid == UNSET) {
 		uid=conf->default_uid;
 	}
-	if (gid < conf->min_gid) {
+	if (gid < conf->min_gid || gid == UNSET){
 		gid=conf->default_gid;
 	}
 
@@ -467,6 +527,12 @@ static int ruid_set_perm (request_rec *r, const char *from_func)
 /* run in post_read_request hook */
 static int ruid_setup (request_rec *r) {
 
+	 /* We decline when we are in a subrequest. The ruid_setup function was
+	  * already executed in the main request. */
+	if (!ap_is_initial_req(r)) {
+		return DECLINED;
+	}
+
 	ruid_config_t *conf = ap_get_module_config (r->server->module_config,  &ruid2_module);
 	ruid_dir_config_t *dconf = ap_get_module_config(r->per_dir_config, &ruid2_module);
 	core_server_config *core = (core_server_config *) ap_get_module_config(r->server->module_config, &core_module);
@@ -512,6 +578,9 @@ static int ruid_setup (request_rec *r) {
 		cap_free(cap);
 	}
 	
+	/* register suidback function */
+	apr_pool_cleanup_register(r->pool, r, ruid_suidback, apr_pool_cleanup_null);
+		
 	if (dconf->ruid_mode==RUID_MODE_CONF)
 	{
 		return ruid_set_perm(r, __func__);
@@ -524,64 +593,7 @@ static int ruid_setup (request_rec *r) {
 /* run in map_to_storage hook */
 static int ruid_uiiii (request_rec *r)
 {
-	return ruid_set_perm(r, __func__);
-}
-
-
-/* run in log_transaction hook */
-static int ruid_suidback (request_rec *r)
-{
-	ruid_config_t *conf = ap_get_module_config (r->server->module_config, &ruid2_module);
-	core_server_config *core = (core_server_config *) ap_get_module_config(r->server->module_config, &core_module);
-
-	cap_t cap;
-	cap_value_t capval[3];
-	
-	if (cap_mode == RUID_CAP_MODE_KEEP) {
-
-		cap=cap_get_proc();
-		capval[0]=CAP_SETUID;
-		capval[1]=CAP_SETGID;
-		capval[2]=CAP_SYS_CHROOT;
-		cap_set_flag(cap, CAP_EFFECTIVE, (conf->chroot_dir ? 3 : 2), capval, CAP_SET);
-		if (cap_set_proc(cap)!=0) {
-			ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s CRITICAL ERROR %s:cap_set_proc failed before setuid", MODULE_NAME, __func__);
-		}
-		cap_free(cap);
-
-		setgroups(0,NULL);
-		setgid(unixd_config.group_id);
-		setuid(unixd_config.user_id);
-	
-		/* set httpd process dumpable after setuid */
-		if (coredump) {
-			prctl(PR_SET_DUMPABLE,1);
-		}
-		
-		/* jail break */
-		if (conf->chroot_dir) {
-			if (fchdir(chroot_root) < 0) {
-				ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s failed to fchdir to root dir (%d) (%s)", MODULE_NAME, chroot_root, strerror(errno));
-			} else {
-				if (chroot(".") != 0) {
-					ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s jail break failed", MODULE_NAME);
-				}
-			}
-			core->ap_document_root = old_root;
-		}
-
-		cap=cap_get_proc();
-		capval[0]=CAP_SETUID;
-		capval[1]=CAP_SETGID;
-		capval[2]=CAP_SYS_CHROOT;
-		cap_set_flag(cap, CAP_EFFECTIVE, 3, capval, CAP_CLEAR);
-		if (cap_set_proc(cap)!=0) {
-			ap_log_error (APLOG_MARK, APLOG_ERR, 0, NULL, "%s CRITICAL ERROR %s:cap_set_proc failed after setuid", MODULE_NAME, __func__);
-		}
-		cap_free(cap);
-	}
-
-	return DECLINED;
+        return ruid_set_perm(r, __func__);
 }
 
 
@@ -589,9 +601,8 @@ static void register_hooks (apr_pool_t *p)
 {
 	ap_hook_post_config (ruid_init, NULL, NULL, APR_HOOK_MIDDLE);
 	ap_hook_child_init (ruid_child_init, NULL, NULL, APR_HOOK_MIDDLE);
-	ap_hook_post_read_request(ruid_setup, NULL, NULL,APR_HOOK_MIDDLE);
+	ap_hook_post_read_request(ruid_setup, NULL, NULL, APR_HOOK_MIDDLE);
 	ap_hook_header_parser(ruid_uiiii, NULL, NULL, APR_HOOK_FIRST);
-	ap_hook_log_transaction (ruid_suidback, NULL, NULL, APR_HOOK_LAST);
 }
 
 
