@@ -1,11 +1,5 @@
-mod-ruid2 (0.9.1-1build2) lucid; urgency=high
+libapache2-mod-ruid2 (0.9.7-0ubuntu1) lucid; urgency=low
 
-  * Fix linking against libcap2
+  * Initial release, based on upstream 0.9.7
 
- -- Wido den Hollander <wido@widodh.nl>  Fri, 19 Nov 2010 16:46:41 +0200
-
-mod-ruid2 (0.9.1-1build1) lucid; urgency=low
-
-  * Initial build of mod-ruid2 0.9.1
-
- -- Wido den Hollander <wido@widodh.nl>  Thu, 18 Nov 2010 15:42:55 +0200
+ -- Frank Groeneveld <frankgroeneveld@gmail.com>  Fri, 29 Jun 2012 15:28:36 +0200
